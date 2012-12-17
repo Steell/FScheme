@@ -107,6 +107,7 @@ type Parser =
    | Number_P of double
    | String_P of string
    | Symbol_P of string
+   | Func_P of (Continuation -> Expression list -> Expression)
    | List_P of Parser list
 
 type Macro = Parser list -> Parser
@@ -163,11 +164,13 @@ type Syntax =
    | Begin of Syntax list
    | Quote_S of Parser
    | Quasi_S of Parser
+   | Func_S of (Continuation -> Expression list -> Expression)
 
 let rec private printParser = function
    | Number_P(n) -> n.ToString()
    | String_P(s) -> "\"" + s + "\""
    | Symbol_P(s) -> s
+   | Func_P(_) -> "#<procedure>"
    | List_P(ps) -> "(" + String.Join(" ", List.map printParser ps) + ")"
 
 //A simple parser
@@ -178,6 +181,7 @@ let rec private parserToSyntax (macro_env : MacroEnvironment) parser =
     | String_P(s) -> String_S(s)
     | Symbol_P(s) -> Id(s)
     | List_P([]) -> List_S([])
+    | Func_P(f) -> Func_S(f)
     | List_P(h :: t) ->
         match h with
         //Set!
@@ -284,6 +288,7 @@ let rec printSyntax indent syntax =
             | Begin(exprs) -> "(begin " + String.Join(" ", (List.map (printSyntax "") exprs)) + ")"
             | Quote_S(p) -> "(quote " + printParser p + ")"
             | Quasi_S(p) -> "(quasiquote " + printParser p + ")"
+            | Func_S(_) -> "#<procedure>"
 
 ///Converts the given Expression to a string.
 let rec print = function
@@ -477,6 +482,9 @@ let rec private compile (compenv : CompilerEnv) syntax : (Continuation -> Enviro
    | String_S(s) ->
       let x = String(s)
       fun cont _ -> x |> cont
+   | Func_S(f) ->
+      let x = Function(f)
+      fun cont _ -> x |> cont
    | Id(id) ->
       match findInEnv id compenv.Value with
       | Some(i1, i2) -> fun cont env -> (env.Value.Item i1).Value.[i2].Value |> cont
@@ -580,6 +588,7 @@ and private makeQuote isQuasi compenv parser =
    | Number_P(n) -> fun cont _ -> Number(n) |> cont
    | String_P(s) -> fun cont _ -> String(s) |> cont
    | Symbol_P(s) -> fun cont _ -> Symbol(s) |> cont
+   | Func_P(f) -> fun cont _ -> Function(f) |> cont
    | List_P(Symbol_P("unquote") :: t) when isQuasi ->
       match t with
       | [expr] -> parserToSyntax macroEnv expr |> compile compenv
@@ -598,6 +607,7 @@ and Eval cont args =
       | Symbol(s) -> Symbol_P(s)
       | Number(n) -> Number_P(n)
       | String(s) -> String_P(s)
+      | Function(f) -> Func_P(f)
       | List(l) -> List_P(List.map toParser l)
       | m -> malformed "eval" m
    match args with
