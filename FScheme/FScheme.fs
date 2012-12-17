@@ -460,6 +460,10 @@ let Sub1 cont = function
    | [Number(n)] -> Number(n - 1.0) |> cont
    | m -> malformed "sub1" (List(m))
 
+let Identity cont = function
+   | [e] -> e |> cont
+   | m malformed "identity" (List(m))
+
 type private CompilerFrame = string list
 type private CompilerEnv = CompilerFrame list ref
 
@@ -684,6 +688,7 @@ let private makeEnvironments() =
    AddDefaultBinding "apply" (Function(Apply))
    AddDefaultBinding "add1" (Function(Add1))
    AddDefaultBinding "sub1" (Function(Sub1))
+   AddDefaultBinding "identity" (Function(Identity))
 
 let Evaluate syntax = compile compileEnvironment syntax id environment
 
