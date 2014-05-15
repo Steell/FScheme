@@ -1,0 +1,7 @@
+c:\users\t_ellis\documents\GitHub\FScheme\FScheme\bin\Debug\FScheme.XML
+c:\users\t_ellis\documents\GitHub\FScheme\FScheme\bin\Debug\FScheme.dll
+c:\users\t_ellis\documents\GitHub\FScheme\FScheme\bin\Debug\FScheme.pdb
+c:\users\t_ellis\documents\GitHub\FScheme\FScheme\obj\Debug\FScheme.dll
+c:\users\t_ellis\documents\GitHub\FScheme\FScheme\obj\Debug\FScheme.pdb
+C:\Users\t_ellis\Documents\GitHub\FScheme\FScheme\bin\Debug\ExtCore.dll
+C:\Users\t_ellis\Documents\GitHub\FScheme\FScheme\bin\Debug\ExtCore.xml

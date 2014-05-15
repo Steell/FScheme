@@ -1,0 +1,521 @@
+<?xml version="1.0" encoding="utf-8"?>
+<doc>
+<assembly><name>FScheme</name></assembly>
+<members>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="M:FScheme.Interpreter.repl">
+<summary>
+REPL -- Read/Eval/Print Loop
+</summary>
+</member>
+<member name="P:FScheme.Interpreter.rep">
+<summary>
+REP -- Read/Eval/Prints
+</summary>
+</member>
+<member name="">
+
+</member>
+<member name="M:FScheme.Interpreter.ParseText(System.Collections.Generic.IEnumerable{System.Char})">
+<summary>
+Parses and evaluates a Value given in text form, and returns the resulting Value
+</summary>
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="P:FScheme.Interpreter.environment">
+<summary>
+Our base environment
+</summary>
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="M:FScheme.Interpreter.load(System.String)">
+<summary>
+Load construct -- loads library files, reads them using the simple tokenizer and parser.
+</summary>
+</member>
+<member name="M:FScheme.Interpreter.Eval(Microsoft.FSharp.Collections.FSharpList{Microsoft.FSharp.Core.FSharpFunc{Microsoft.FSharp.Core.FSharpFunc{FScheme.Value.Value,FScheme.Value.Value},FScheme.Value.Value}})">
+<summary>
+Eval construct -- evaluates code quotations
+</summary>
+</member>
+<member name="">
+
+</member>
+<member name="M:FScheme.Interpreter.compile(Microsoft.FSharp.Core.FSharpRef{Microsoft.FSharp.Collections.FSharpList{Microsoft.FSharp.Collections.FSharpList{System.String}}},FScheme.Parser.Syntax)">
+<summary>
+A basic compiler
+</summary>
+</member>
+<member name="">
+
+</member>
+<member name="T:FScheme.Interpreter">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="M:FScheme.Library.CallCC(Microsoft.FSharp.Collections.FSharpList{Microsoft.FSharp.Core.FSharpFunc{Microsoft.FSharp.Core.FSharpFunc{FScheme.Value.Value,FScheme.Value.Value},FScheme.Value.Value}},Microsoft.FSharp.Core.FSharpFunc{FScheme.Value.Value,FScheme.Value.Value})">
+<summary>
+Call/cc -- gives access to the current interpreter continuation.
+</summary>
+</member>
+<member name="">
+
+</member>
+<member name="M:FScheme.Library.Throw``1(Microsoft.FSharp.Collections.FSharpList{Microsoft.FSharp.Core.FSharpFunc{Microsoft.FSharp.Core.FSharpFunc{FScheme.Value.Value,FScheme.Value.Value},FScheme.Value.Value}})">
+<summary>
+Error construct
+</summary>
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="M:FScheme.Library.BuildSeq(Microsoft.FSharp.Collections.FSharpList{Microsoft.FSharp.Core.FSharpFunc{Microsoft.FSharp.Core.FSharpFunc{FScheme.Value.Value,FScheme.Value.Value},FScheme.Value.Value}})">
+<summary>
+Build Sequence
+</summary>
+</member>
+<member name="M:FScheme.Library.Sort(Microsoft.FSharp.Collections.FSharpList{Microsoft.FSharp.Core.FSharpFunc{Microsoft.FSharp.Core.FSharpFunc{FScheme.Value.Value,FScheme.Value.Value},FScheme.Value.Value}})">
+<summary>
+Sorts using natural ordering. Only works for primitive types (numbers, strings, etc.)
+</summary>
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="M:FScheme.Library.Display(Microsoft.FSharp.Collections.FSharpList{Microsoft.FSharp.Core.FSharpFunc{Microsoft.FSharp.Core.FSharpFunc{FScheme.Value.Value,FScheme.Value.Value},FScheme.Value.Value}})">
+<summary>
+Display construct -- used to print to stdout
+</summary>
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="M:FScheme.Library.boolMath(Microsoft.FSharp.Core.FSharpFunc{System.IComparable,Microsoft.FSharp.Core.FSharpFunc{System.IComparable,System.Boolean}},System.String,Microsoft.FSharp.Collections.FSharpList{Microsoft.FSharp.Core.FSharpFunc{Microsoft.FSharp.Core.FSharpFunc{FScheme.Value.Value,FScheme.Value.Value},FScheme.Value.Value}})">
+<summary>
+Simple wrapper for comparison operations.
+</summary>
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="M:FScheme.Library.mathbin(Microsoft.FSharp.Core.FSharpFunc{System.Double,Microsoft.FSharp.Core.FSharpFunc{System.Double,System.Double}},System.String,Microsoft.FSharp.Collections.FSharpList{Microsoft.FSharp.Core.FSharpFunc{Microsoft.FSharp.Core.FSharpFunc{FScheme.Value.Value,FScheme.Value.Value},FScheme.Value.Value}})">
+<summary>
+Simple wrapper for arithmatic operations.
+</summary>
+</member>
+<member name="">
+
+</member>
+<member name="M:FScheme.Library.malformed``1(System.String,FScheme.Value.Value)">
+<summary>
+Prints a malformed statement error.
+</summary>
+</member>
+<member name="T:FScheme.Library">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="T:FScheme.Parser.Syntax">
+<summary>
+AST for FScheme Values
+</summary>
+</member>
+<member name="">
+
+</member>
+<member name="T:FScheme.Parser.ExternMacro">
+<summary>
+FScheme Macro delegate. Takes a list of unevaluated Values and an Environment as arguments, and returns a Value.
+</summary>
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="M:FScheme.Parser.makeExternMacro(FScheme.Parser.ExternMacro)">
+<summary>
+Makes a Macro out of an ExternMacro
+</summary>
+</member>
+<member name="">
+
+</member>
+<member name="M:FScheme.Parser.Or(Microsoft.FSharp.Collections.FSharpList{FScheme.Parser.Parser})">
+<summary>
+Or Macro
+</summary>
+</member>
+<member name="M:FScheme.Parser.And(Microsoft.FSharp.Collections.FSharpList{FScheme.Parser.Parser})">
+<summary>
+And Macro
+</summary>
+</member>
+<member name="M:FScheme.Parser.LetStar(Microsoft.FSharp.Collections.FSharpList{FScheme.Parser.Parser})">
+<summary>
+Let* construct
+</summary>
+</member>
+<member name="">
+
+</member>
+<member name="T:FScheme.Parser">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="">
+
+</member>
+<member name="T:FScheme.Thunk.Cont">
+
+</member>
+<member name="T:FScheme.Thunk">
+
+</member>
+<member name="">
+
+</member>
+<member name="T:FScheme.Value.ExternFunc">
+<summary>
+FScheme Function delegate. Takes a list of Values as arguments, and returns a Value.
+</summary>
+</member>
+<member name="T:FScheme.Value.Continuation">
+<summary>
+Function that takes a Value and returns a Value.
+</summary>
+</member>
+<member name="T:FScheme.Value.Thunk">
+<summary>
+Delayed computations
+</summary>
+</member>
+<member name="T:FScheme.Value.Func">
+<summary>
+Type of all functions
+</summary>
+</member>
+<member name="T:FScheme.Value.Value.Dummy">
+<summary>
+Value representing an invalid value (used for mutation, where Values shouldn&apos;t return anything).
+Should NOT be used except internally by this interpreter.
+</summary>
+</member>
+<member name="T:FScheme.Value.Value.Function">
+<summary>
+Value representing a function.
+</summary>
+</member>
+<member name="T:FScheme.Value.Value.List">
+<summary>
+Value representing a list of sub Values.
+</summary>
+</member>
+<member name="T:FScheme.Value.Value.Symbol">
+<summary>
+Value representing a symbol.
+</summary>
+</member>
+<member name="T:FScheme.Value.Value.String">
+<summary>
+Value representing a string.
+</summary>
+</member>
+<member name="T:FScheme.Value.Value.Number">
+<summary>
+Value representing a number (double).
+</summary>
+</member>
+<member name="T:FScheme.Value.Value.Container">
+<summary>
+Value representing any .NET object.
+</summary>
+</member>
+<member name="T:FScheme.Value.Value">
+<summary>
+Types of FScheme values
+</summary>
+</member>
+<member name="">
+
+</member>
+<member name="M:FScheme.Value.makeExternFunc(FScheme.Value.ExternFunc)">
+<summary>
+Makes a Value.Function out of an ExternFunc
+</summary>
+</member>
+<member name="M:FScheme.Value.force``2(Microsoft.FSharp.Core.FSharpFunc{Microsoft.FSharp.Core.FSharpFunc{``0,``0},``1})">
+<summary>
+Forces evaluation of a Thunk
+</summary>
+</member>
+<member name="T:FScheme.Value">
+
+</member>
+</members>
+</doc>
