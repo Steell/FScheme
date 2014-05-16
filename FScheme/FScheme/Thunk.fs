@@ -26,3 +26,11 @@ type ContBuilder() =
     member x.ReturnFrom(v) = v
     member x.Zero() = fun _ -> ()
 let cps = ContBuilder()
+
+let rec sequence ms = 
+    let k m m' = 
+        cps {
+            let! x = m
+            let! xs = m'
+            return x::xs }
+    List.foldBack k ms (constant [])

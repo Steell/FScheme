@@ -3,11 +3,12 @@
 open FScheme.Parser
 open FScheme.Thunk
 open FScheme.Value
+open FScheme.Value.List
 
 open ExtCore.Collections
 
 ///Prints a malformed statement error.
-let malformed n e = sprintf "Malformed '%s': %s" n (print (List(LazyList.ofList [constant <| e]))) |> failwith
+let malformed n e = sprintf "Malformed '%s': %s" n (print e) |> failwith
 
 let private foldOp name op =
     let rec fold a args =
@@ -37,7 +38,7 @@ let private mathbin (op: double -> double -> double) name = function
             | m -> return malformed (sprintf "%s arg" name) m
         | m -> return malformed (sprintf "%s arg" name) m }
    //Otherwise, fail.
-   | m -> malformed name <| List(LazyList.ofList m)
+   | m -> malformed name <| thunkList m
 
 let private math0 op name start exprs = 
   cps {
@@ -64,7 +65,7 @@ let private math1 op (op2: Func) unary name = function
                 | m -> malformed (sprintf "%s arg" name) m
             return op2 args cont'
         | m -> return malformed (sprintf "%s arg" name) m }
-  | m -> malformed name <| List(LazyList.ofList m)
+  | m -> malformed name <| thunkList m
 
 //Arithmatic functions
 let Add : Func = math0 (+) "addition" 0.
@@ -76,10 +77,7 @@ let Exponent : Func = mathbin ( ** ) "exponent"
 
 ///Simple wrapper for comparison operations.
 let private boolMath (op : (System.IComparable -> System.IComparable -> bool)) name args =
-   let comp a' b' = 
-      match (op a' b') with
-      | true -> Number(1.0)
-      | _ -> Number(0.0)
+   let comp a' b' = Bool(op a' b')
    match args with
    | [a; b] ->
        cps {
@@ -89,8 +87,8 @@ let private boolMath (op : (System.IComparable -> System.IComparable -> bool)) n
                match a, b with
                | Number(a), Number(b) -> comp a b
                | String(a), String(b) -> comp a b
-               | m -> malformed name (List(Seq.map constant [a; b] |> LazyList.ofSeq)) }
-   | m -> malformed name <| List(LazyList.ofList m)
+               | m -> malformed name (thunkList <| List.map constant [a; b]) }
+   | m -> malformed name <| thunkList m
 
 //Comparison operations.
 let LTE : Func = boolMath (<=) "less-than-or-equals"
@@ -106,7 +104,7 @@ let Display = function
             let! v = e
             print v |> printf "DISPLAY: %s \n";
             return Dummy("Dummy 'display'") }
-   | m -> malformed "display" <| List(LazyList.ofList m)
+   | m -> malformed "display" <| thunkList m
 
 let Add1 = function
    | [arg] ->
@@ -116,7 +114,7 @@ let Add1 = function
                 match n with
                 | Number(n) -> Number(n + 1.)
                 | m -> malformed "add1" <| m }
-   | m -> malformed "add1" <| List(LazyList.ofList m)
+   | m -> malformed "add1" <| thunkList m
 
 let Sub1 = function
    | [arg] ->
@@ -126,13 +124,13 @@ let Sub1 = function
                 match n with
                 | Number(n) -> Number(n - 1.)
                 | m -> malformed "aub1" <| m }
-   | m -> malformed "sub1" <| List(LazyList.ofList m)
+   | m -> malformed "sub1" <| thunkList m
 
 //Random Number
 let private _r = new System.Random()
 let RandomDbl = function
     | [] -> cps { return Number(_r.NextDouble()) }
-    | m -> malformed "random" <| List(LazyList.ofList m)
+    | m -> malformed "random" <| thunkList m
 
 //List Functions
 let IsEmpty = function
@@ -140,82 +138,76 @@ let IsEmpty = function
         cps {
             let! l = arg
             match l with
-            | List(s) when Seq.isEmpty s -> return Number(1.0)
-            | _ -> return Number(0.0) }
-    | m -> malformed "empty?" <| List(LazyList.ofList m)
+            | Data(d) -> return Bool(isNil d)
+            | _ -> return Bool(false) }
+    | m -> malformed "empty?" <| thunkList m
 
 let Cons = function 
-    | [head; tail] -> 
-        cps {
-            let! t = tail
-            return
-                match t with
-                | List(t) -> List(LazyList.cons head t)
-                | _ -> malformed "cons" <| List(LazyList.ofList [head; tail]) }
-    | m -> malformed "cons" <| List(LazyList.ofList m)
+    | [head; tail] -> cps { return cons head tail }
+    | m -> malformed "cons" <| thunkList m
 
-let Car = function 
+let Car : Func = function 
     | [l] ->
         cps {
             let! list = l
             match list with
-            | List(l) -> return! Seq.nth 0 l
-            | _ -> return malformed "car" <| List(LazyList.ofList [l]) }
-    | m -> malformed "car" <| List(LazyList.ofList m)
+            | Data(d) -> return! car d
+            | _ -> return malformed "car" <| thunkList [l] }
+    | m -> malformed "car" <| thunkList m
 
-let Cdr = function
+let Cdr : Func = function
     | [l] ->
         cps {
             let! list = l
-            return
-                match list with
-                | List(l) -> List(LazyList.tail l)
-                | _ -> malformed "car" <| List(LazyList.ofList [l]) }
-    | m -> malformed "cdr" <| List(LazyList.ofList m)
+            match list with
+            | Data(d) -> return! cdr d
+            | _ -> return malformed "car" <| thunkList [l] }
+    | m -> malformed "cdr" <| thunkList m
 
 let Rev = function
     | [l] ->
         cps {
             let! list = l
-            return
-                match list with
-                | List(l) -> LazyList.toList l |> List.rev |> LazyList.ofList |> List
-                | m -> malformed "reverse" m }
-    | m -> malformed "reverse" <| List(LazyList.ofList m)
+            match list with
+            | Data(d) -> 
+                let! wholeList = toList d
+                return List.rev wholeList |> thunkList
+            | m -> return malformed "reverse" m }
+    | m -> malformed "reverse" <| thunkList m
 
-let MakeList args = LazyList.ofList args |> List |> constant
+let MakeList (args: Thunk list) = thunkList args |> constant
 
 let Len = function
     | [l] ->
         cps {
             let! list = l
-            return
-                match list with
-                | List(l) -> Number(double (LazyList.length l))
-                | m -> malformed "len" m }
-    | m -> malformed "len" <| List(LazyList.ofList m)
+            match list with
+            | Data(d) -> 
+                let! wholeList = toList d
+                return List.length wholeList |> double |> Number
+            | m -> return malformed "len" m }
+    | m -> malformed "len" <| thunkList m
 
-let Append = function
+let Append : Func = function
     | [l1; l2] ->
         cps {
             let! list1 = l1
-            let! list2 = l2
-            return 
-                match list1, list2 with
-                | List(l1), List(l2) -> List(LazyList.append l1 l2)
-                | _ -> malformed "append" (List(LazyList.ofList [l1; l2])) }
-    | m -> malformed "append" <| List(LazyList.ofList m)
+            match list1 with
+            | Data(l1) ->
+                let! list2 = l2
+                return! concat l1 list2
+            | _ -> return malformed "append" <| thunkList [l1; l2] }
+    | m -> malformed "append" <| thunkList m
 
 let Take = function
     | [n; l] ->
         cps {
             let! amt = n
             let! list = l
-            return
-                match amt, list with
-                | Number(n), List(l) -> List(LazyList.take (int n) l)
-                | _ -> malformed "take" (List(LazyList.ofList [n; l])) }
-    | m -> malformed "take" <| List(LazyList.ofList m)
+            match amt, list with
+            | Number(n), Data(l) -> return! take (int n) l
+            | _ -> return malformed "take" <| thunkList [n; l] }
+    | m -> malformed "take" <| thunkList m
 
 let Get = function
     | [n; l] ->
@@ -223,20 +215,19 @@ let Get = function
             let! amt = n
             let! list = l
             match amt, list with
-            | Number(n), List(l) -> return! Seq.nth (int n) l
-            | _ -> return malformed "get" (List(LazyList.ofList [n; l])) }
-    | m -> malformed "get" <| List(LazyList.ofList m)
+            | Number(n), Data(l) -> return! get (int n) l
+            | _ -> return malformed "get" <| thunkList [n; l] }
+    | m -> malformed "get" <| thunkList m
 
-let Drop = function
+let Drop : Func = function
     | [n; l] ->
         cps {
             let! amt = n
             let! list = l
-            return
-                match amt, list with
-                | Number(n), List(l) -> List(LazyList.skip (int n) l)
-                | _ -> malformed "drop" (List(LazyList.ofList [n; l])) }
-    | m -> malformed "drop" <| List(LazyList.ofList m)
+            match amt, list with
+            | Number(n), Data(l) -> return! drop (int n) l
+            | _ -> return malformed "drop" <| thunkList [n; l] }
+    | m -> malformed "drop" <| thunkList m
 
 ///Sorts using natural ordering. Only works for primitive types (numbers, strings, etc.)
 let Sort = function
@@ -245,13 +236,14 @@ let Sort = function
       cps {
           let! list = l
           match list with
-          | List(l) ->
-              if Seq.isEmpty l then
-                  return malformed "sort" (List(l))
+          | Data(l) ->
+              let! l = toList l
+              if List.isEmpty l then
+                  return malformed "sort" nil
               else
+                  let! vals = sequence l
                   //Peek and see what kind of data we're sorting
-                  let n = Seq.nth 0 l
-                  let! first = n
+                  let first = List.head vals
                   match first with
                   //If the first element is a Value.Number...
                   | Number(n) ->
@@ -263,11 +255,10 @@ let Sort = function
                             | m -> malformed "sort" m
                         //Convert Value.Numbers to doubles, sort them, then convert them back to Value.Numbers.
                         return 
-                            LazyList.map (force >> converter) l 
-                                |> Seq.sort 
-                                |> Seq.map (fun n -> cps { return Number(n) }) 
-                                |> LazyList.ofSeq
-                                |> List
+                            List.map converter vals
+                                |> List.sort 
+                                |> List.map (fun n -> cps { return Number(n) }) 
+                                |> thunkList
                   //If the first element is a Value.String...
                   | String(s) ->
                         //converter: Makes sure given Value is a Value.String.
@@ -278,15 +269,14 @@ let Sort = function
                             | m -> malformed "sort" m
                         //Convert Value.Strings to strings, sort them, then convert them back to Value.Strings.
                         return 
-                            LazyList.map (force >> converter) l 
-                                |> Seq.sort 
-                                |> Seq.map (fun n -> cps { return String(n) }) 
-                                |> LazyList.ofSeq
-                                |> List
+                            List.map converter vals 
+                                |> List.sort 
+                                |> List.map (fun n -> cps { return String(n) }) 
+                                |> thunkList
                   | m -> return malformed "sort type" m
           | m ->  return malformed "sort" m }
    //Otherwise, fail.
-   | m -> malformed "sort" <| List(LazyList.ofList m)
+   | m -> malformed "sort" <| thunkList m
 
 ///Build Sequence
 let BuildSeq = function
@@ -299,11 +289,10 @@ let BuildSeq = function
                 match start, stop, step with
                 | Number(start), Number(stop), Number(step) -> 
                     [start .. step .. stop] 
-                        |> Seq.map (Number >> constant) 
-                        |> LazyList.ofSeq 
-                        |> List
-                | _ -> malformed "build-seq" (List(LazyList.ofList args)) }
-   | m -> malformed "build-seq" <| List(LazyList.ofList m)
+                        |> List.map (Number >> constant) 
+                        |> thunkList
+                | _ -> malformed "build-seq" <| thunkList args }
+   | m -> malformed "build-seq" <| thunkList m
 
 let String2Num = function
     | [s] ->
@@ -313,7 +302,7 @@ let String2Num = function
                 match string with
                 | String(s) -> Number(System.Convert.ToDouble(s))
                 | m -> malformed "string" m }
-    | m -> malformed "string" <| List(LazyList.ofList m)
+    | m -> malformed "string" <| thunkList m
 
 let Num2String = function
     | [n] ->
@@ -323,14 +312,14 @@ let Num2String = function
                 match num with
                 | Number(n) -> String(n.ToString())
                 | m -> malformed "number" m }
-    | m -> malformed "number" <| List(LazyList.ofList m)
+    | m -> malformed "number" <| thunkList m
 
 let Concat = function
     | [l] ->
         cps {
             let! list = l
             match force l with
-            | List(l) -> 
+            | Data(d) -> 
                 let rec concat a l =
                     cps {
                         if Seq.isEmpty l then
@@ -340,9 +329,10 @@ let Concat = function
                             match string with
                             | String(s) -> return! concat (a + s) (Seq.skip 1 l)
                             | m -> return malformed "string" m }
+                let! l = toList d
                 return! concat "" l
             | m -> return malformed "concat" m }
-    | m -> malformed "concat" <| List(LazyList.ofList m)
+    | m -> malformed "concat" <| thunkList m
 
 ///Error construct
 let Throw = function
@@ -350,12 +340,12 @@ let Throw = function
         match force s with
         | String(s) -> failwith s
         | m -> malformed "throw" m
-   | m -> malformed "throw" <| List(LazyList.ofList m)
+   | m -> malformed "throw" <| thunkList m
 
 let private Current cont =
    let func = function
       | [expr] -> fun _ -> expr cont
-      | m -> malformed "continuation application" <| List(LazyList.ofList m)
+      | m -> malformed "continuation application" <| thunkList m
    Function(func)
 
 ///Call/cc -- gives access to the current interpreter continuation.
@@ -366,7 +356,7 @@ let CallCC (args: Thunk list) (cont: Continuation) =
             match func with
             | Function(callee) -> callee [constant <| Current(cont)] cont
             | m -> malformed "call/cc" m)
-   | m -> malformed "call/cc" <| List(LazyList.ofList m)
+   | m -> malformed "call/cc" <| thunkList m
 
 let Apply = function
    | [arg1; arg2] as args ->
@@ -374,10 +364,12 @@ let Apply = function
             let! func = arg1
             let! fargs = arg2
             match func, fargs with
-            | Function(f), List(args) -> return! f (List.ofSeq args)
-            | _ -> return malformed "apply" (List(LazyList.ofList args)) }
-   | m -> malformed "apply" <| List(LazyList.ofList m)
+            | Function(f), Data(args) -> 
+                let! list = toList args
+                return! f list
+            | _ -> return malformed "apply" <| thunkList args }
+   | m -> malformed "apply" <| thunkList m
 
 let Identity = function
    | [e] -> e
-   | m   -> cps { return malformed "identity" <| List(LazyList.ofList m) }
+   | m   -> cps { return malformed "identity" <| thunkList m }

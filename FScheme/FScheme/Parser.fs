@@ -79,15 +79,15 @@ let LetStar : Macro = function
 
 ///And Macro
 let rec And : Macro = function
-   | [] -> Number_P(1.0)
+   | [] -> Symbol_P("#t")
    | [expr] -> expr
-   | h :: t -> List_P([Symbol_P("if"); h; And t; Number_P(0.0)])
+   | h :: t -> List_P([Symbol_P("if"); h; And t; Symbol_P("#f")])
 
 ///Or Macro
 let rec Or : Macro = function
-   | [] -> Number_P(0.0)
+   | [] -> Symbol_P("#f")
    | [expr] -> expr
-   | h :: t -> List_P([Symbol_P("if"); h; Number_P(1.0); Or t])
+   | h :: t -> List_P([Symbol_P("if"); h; Symbol_P("#t"); Or t])
 
 let macroEnv = 
     Map.ofList [
