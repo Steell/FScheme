@@ -57,7 +57,7 @@ let rec private compile (compenv : CompilerEnv) syntax : Environment -> Thunk =
          fun env ->
             let box = (env.Value.Item i1).Value.[i2]
             box := make_thunk (ce env)
-            constant <| Dummy(sprintf "set! %s" id)
+            cps { return Dummy(sprintf "set! %s" id) }
       | None -> sprintf "Unbound identifier: %s" id |> failwith
 
    | Bind(names, exprs, body) -> compile' (List_S(Fun(names, body) :: exprs))
@@ -65,7 +65,7 @@ let rec private compile (compenv : CompilerEnv) syntax : Environment -> Thunk =
    | BindRec(names, exprs, body) ->
       let cbody = compile (ref (names :: compenv.Value)) body
       let cargs = List.map (ref (names :: compenv.Value) |> compile) exprs
-      let boxes = [ for _ in 1 .. List.length cargs -> Dummy("letrec") |> constant |> ref ]
+      let boxes = [ for _ in 1 .. List.length cargs -> cps { return Dummy("letrec") } |> ref ]
       let newFrame : Frame = List.toArray boxes |> ref
       fun env ->
          let env' = newFrame :: env.Value |> ref
@@ -81,17 +81,17 @@ let rec private compile (compenv : CompilerEnv) syntax : Environment -> Thunk =
          fun env ->
             let box = env.Value.Head.Value.[idx]
             box := make_thunk (cbody env)
-            constant <| Dummy(sprintf "defined '%s'" name)
+            cps { return Dummy(sprintf "defined '%s'" name) }
       | None ->
          let lastindex = compenv.Value.Head.Length
          compenv := (List.append compenv.Value.Head [name]) :: compenv.Value.Tail
          let cbody = compile compenv body
          fun env -> 
-           let def : Thunk ref = Dummy(sprintf "define '%s'" name) |> constant |> ref
+           let def : Thunk ref = ref <| cps { return Dummy(sprintf "define '%s'" name) }
            System.Array.Resize(env.Value.Head, env.Value.Head.Value.Length + 1)
            env.Value.Head.Value.SetValue(def, lastindex)
            def := make_thunk (cbody env)
-           constant <| Dummy(sprintf "defined '%s'" name)
+           cps { return Dummy(sprintf "defined '%s'" name) }
 
    | Fun(names, body) ->
       let compenv' = names :: compenv.Value |> ref
@@ -109,38 +109,43 @@ let rec private compile (compenv : CompilerEnv) syntax : Environment -> Thunk =
          else
             failwith "Can't call 0-arity function with arguments."
       fun env ->
-         Function(fun exprs -> ref (pack exprs) :: env.Value |> ref |> cbody) |> constant
+         cps { return Function(fun exprs -> ref (pack exprs) :: env.Value |> ref |> cbody) }
 
    | List_S(fun_expr :: args) ->
       let cfun = compile' fun_expr
       let cargs = List.map compile' args
-      fun env cont ->
-         let cont' = function
-            | Function(f) ->
-                f (List.map (fun carg -> make_thunk (carg env)) cargs) cont
-            | m -> printSyntax "" syntax |> sprintf "expected function for call: %s" |> failwith
-         cfun env cont'
+      fun env ->
+         cps {
+            let! f' = cfun env
+            match f' with
+            | Function(f) -> return! f (List.map (fun carg -> make_thunk (carg env)) cargs)
+            | m -> return printSyntax "" syntax |> sprintf "expected function for call: %s" |> failwith }
 
    | If(cond, then_expr, else_expr) ->
       let ccond = compile' cond
       let cthen = compile' then_expr
       let celse = compile' else_expr
-      fun env cont ->
-         let cont' = function
-            | Bool(b) -> (if b then cthen else celse) env cont
-            | _ -> cthen env cont
-         ccond env cont' 
+      fun env ->
+         cps {
+            let! cond = ccond env
+            return!
+                match cond with
+                | Bool(b) -> (if b then cthen else celse) env
+                | _ -> cthen env }
 
    | Begin([expr]) -> compile' expr
 
    | Begin(exprs) ->
       let body = List.map compile' exprs
       let d = Dummy("empty begin")
-      fun env cont ->
-         let rec runall' acc = function
-            | h :: t -> h env <| flip runall' t
-            | [] -> acc |> cont
-         runall' d body
+      fun env -> 
+        cps { 
+            let! results = List.map ((|>) env) body |> sequence
+            return 
+                if List.isEmpty results then
+                    d
+                else
+                    List.last results }
 
    | Quote_S(parser) -> makeQuote false compenv parser
    | Quasi_S(parser) -> makeQuote true compenv parser
@@ -162,11 +167,10 @@ and private makeQuote isQuasi compenv parser =
 
    | List_P(exprs) ->
       let qargs = List.map makeQuote' exprs
-      fun env cont ->
-         let rec mapquote acc = function
-            | h :: t -> h env <| (fun x -> mapquote (x :: acc) t)
-            | [] -> List.rev acc |> List.map constant |> thunkList |> cont
-         mapquote [] qargs
+      fun env ->
+         cps {
+            let! vals = List.map ((|>) env) qargs |> sequence
+            return valList vals }
 
 ///Eval construct -- evaluates code quotations
 and Eval (args: Thunk list) : Continuation -> Value =
@@ -291,13 +295,19 @@ let private evaluateSchemeDefs() =
          (and (or a b) 
                (not (and a b)))))
 
-   (define fold 
-      ;; fold :: (X Y -> Y) Y [listof X] -> Y
+   (define foldr 
+      ;; foldr :: (X Y -> Y) Y [listof X] -> Y
       (lambda (f a xs) 
          (if (empty? xs) 
              a 
              (f (first xs)
-                (fold f a (rest xs)))))) 
+                (foldr f a (rest xs))))))
+                
+   (define foldl
+      (lambda (f a xs)
+         (if (empty? xs)
+             a
+             (foldl f (f (first xs) a) (rest xs))))) 
 
    (define map
       ;; map :: (X -> Y) [listof X] -> [listof Y] 
@@ -338,7 +348,7 @@ let private evaluateSchemeDefs() =
             (let* ((lofls (reverse lsts)) 
                      (rst (rest lofls))
                      (cp (lambda (lsts) 
-                           (fold cp-list-list 
+                           (foldl cp-list-list 
                                  (map list (first lofls))
                                  rst))))
                (map (lambda (args) (apply comb args)) (cp lofls))))))
@@ -396,7 +406,7 @@ let private evaluateSchemeDefs() =
 
   (define for-each 
      ;; for-each :: (X -> unit) [listof X] -> unit
-     (lambda (f lst) (fold (lambda (x _) (f x)) (begin) lst)))
+     (lambda (f lst) (foldr (lambda (x _) (f x)) (begin) lst)))
   
   (define fix (lambda (f) (f (fix f))))
   
@@ -482,8 +492,8 @@ let test (log : ErrorLog) =
    case "(apply append '((1) (2)))" "(1 2)"
    
    //Fold
-   case "(fold + 0 '(1 2 3))"   "6"
-   case "(fold * 1 '(2 3 4 5))" "120" // fold
+   case "(foldr + 0 '(1 2 3))"   "6"
+   case "(foldr * 1 '(2 3 4 5))" "120" // fold
    
    //Map
    case "(map (lambda (x) x) '(1 2 3))" "(1 2 3)"
@@ -492,12 +502,12 @@ let test (log : ErrorLog) =
    case "(filter (lambda (x) (< x 2)) '(0 2 3 4 1 6 5))" "(0 1)"
    
    //Cartesian Product
-   //case "(cartesian-product list (list 1 2) (list 3 4) (list 5 6))" 
-   //     "((1 3 5) (1 3 6) (1 4 5) (1 4 6) (2 3 5) (2 3 6) (2 4 5) (2 4 6))"
+   case "(cartesian-product list (list 1 2) (list 3 4) (list 5 6))" 
+        "((1 3 5) (1 3 6) (1 4 5) (1 4 6) (2 3 5) (2 3 6) (2 4 5) (2 4 6))"
    
    //Sorting
-   case "(sort-by '((2 2) (2 1) (1 1)) (lambda (x) (fold + 0 x)))" "((1 1) (2 1) (2 2))"
-   case "(sort-with '((2 2) (2 1) (1 1)) (lambda (x y) (let ((size (lambda (l) (fold + 0 l)))) (- (size x) (size y)))))" "((1 1) (2 1) (2 2))"
+   case "(sort-by '((2 2) (2 1) (1 1)) (lambda (x) (foldr + 0 x)))" "((1 1) (2 1) (2 2))"
+   case "(sort-with '((2 2) (2 1) (1 1)) (lambda (x y) (let ((size (lambda (l) (foldr + 0 l)))) (- (size x) (size y)))))" "((1 1) (2 1) (2 2))"
    
    //Zip/Combine
    case "(zip '((1) (2) (3)) '((4) (5) (6)))" "(((1) (4)) ((2) (5)) ((3) (6)))"
