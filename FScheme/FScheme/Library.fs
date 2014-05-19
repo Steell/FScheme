@@ -32,38 +32,29 @@ let private mathbin (op: double -> double -> double) name = function
         | Number(n) ->
             let! n2 = arg2
             match n2 with
-            | Number(n2) ->
-                let! result = foldOp name op (op n n2) args
-                return Number(result)
+            | Number(n2) -> return! foldOp name op (op n n2) args ||> Number
             | m -> return malformed (sprintf "%s arg" name) m
         | m -> return malformed (sprintf "%s arg" name) m }
    //Otherwise, fail.
    | m -> malformed name <| thunkList m
 
 let private math0 op name start exprs = 
-  cps {
-      let! result = foldOp name op start exprs
-      return Number(result) }
+    foldOp name op start exprs ||> Number
   
 
 let private math1 op (op2: Func) unary name = function
-  | [arg] ->
-    cps {
-        let! n = arg 
-        return
-            match n with
-            | Number(n) -> Number(unary n)
-            | m -> malformed name m }
+  | [arg] -> arg ||> function Number(n) -> Number(unary n)
+                            | m -> malformed name m
   | arg :: args ->
     cps {
         let! n = arg
         match n with
         | Number(n) ->
-            let cont' x =
+            let! x = op2 args
+            return
                 match x with
-                | Number x -> Number(op n x)
+                | Number(x) -> Number(op n x)
                 | m -> malformed (sprintf "%s arg" name) m
-            return op2 args cont'
         | m -> return malformed (sprintf "%s arg" name) m }
   | m -> malformed name <| thunkList m
 
@@ -74,6 +65,11 @@ let Multiply : Func = math0 (*) "multiplication" 1.
 let Divide : Func = math1 (/) Multiply ((/) 1.) "division"
 let Modulus : Func = mathbin (%) "modulus"
 let Exponent : Func = mathbin ( ** ) "exponent"
+
+let Sqrt = function
+    | [arg] -> arg ||> function Number(n) -> Number(System.Math.Sqrt n)
+                              | m -> malformed "sqrt" m
+    | m -> malformed "sqrt" <| thunkList m
 
 ///Simple wrapper for comparison operations.
 let private boolMath (op : (System.IComparable -> System.IComparable -> bool)) name args =
@@ -95,35 +91,68 @@ let LTE : Func = boolMath (<=) "less-than-or-equals"
 let GTE : Func = boolMath (>=) "greater-than-or-equals"
 let LT : Func = boolMath (<) "less-than"
 let GT : Func = boolMath (>) "greater-than"
-let EQ : Func = boolMath (=) "equals"
+
+let rec EQ = function
+    | [arg1; arg2] as args ->
+        cps {
+            let! v1 = arg1
+            let! v2 = arg2
+            match v1, v2 with
+            | Number(x1), Number(x2) -> return Bool(x1 = x2)
+            | String(x1), String(x2) -> return Bool(x1 = x2)
+            | Container(o1), Container(o2) -> return Bool(o1 = o2 || o1.Equals(o2))
+            | Data(x1), Data(x2) ->
+                let! l1 = toList x1
+                let! l2 = toList x2
+                let eq' x y =
+                    cps {
+                        let! value = EQ [x; y]
+                        match value with Bool(b) -> return b | _ -> return false }
+                let forall2 (p: Thunk -> Thunk -> CPS<_, _>) =
+                    let rec forall (l1: Thunk list) (l2: Thunk list) =
+                        cps {
+                            match (l1, l2) with
+                            | ([], _) | (_, []) -> return true
+                            | (h1::t1, h2::t2) ->
+                                let! result = p h1 h2
+                                if not result then 
+                                    return false 
+                                else 
+                                    return! forall t1 t2 }
+                    forall
+                let! b = forall2 eq' l1 l2
+                return Bool(b) 
+            | _ -> return malformed "=" <| thunkList args }
+    | m -> malformed "=" <| thunkList m
+
+let Not = function
+    | [arg] -> 
+        cps {
+            let! value = arg
+            return if ValueToBool value then Number(0.) else Number(1.) }
+    | m -> malformed "not" <| thunkList m
+
+let Xor = function
+    | [arg1; arg2] as args ->
+        cps {
+            let! a = arg1
+            let! b = arg2
+            let b' = ValueToBool b
+            let result = if ValueToBool a then not b' else b'
+            return Bool(result) }
+    | m -> malformed "xor" <| thunkList m
 
 ///Display construct -- used to print to stdout
 let Display = function
-   | [e] ->
-        cps {
-            let! v = e
-            print v |> printf "DISPLAY: %s \n";
-            return Dummy("Dummy 'display'") }
+   | [e] -> e ||> print ||> printf "DISPLAY: %s \n" ||> fun () -> Dummy("Dummy 'display'")
    | m -> malformed "display" <| thunkList m
 
 let Add1 = function
-   | [arg] ->
-        cps {
-            let! n = arg
-            return
-                match n with
-                | Number(n) -> Number(n + 1.)
-                | m -> malformed "add1" <| m }
+   | [arg] -> arg ||> function Number(n) -> Number(n + 1.) | m -> malformed "add1" m
    | m -> malformed "add1" <| thunkList m
 
 let Sub1 = function
-   | [arg] ->
-        cps {
-            let! n = arg
-            return
-                match n with
-                | Number(n) -> Number(n - 1.)
-                | m -> malformed "aub1" <| m }
+   | [arg] -> arg ||> function Number(n) -> Number(n - 1.) | m -> malformed "sub1" m
    | m -> malformed "sub1" <| thunkList m
 
 //Random Number
@@ -134,58 +163,31 @@ let RandomDbl = function
 
 //List Functions
 let IsEmpty = function
-    | [arg] -> 
-        cps {
-            let! l = arg
-            match l with
-            | Data(d) -> return Bool(isNil d)
-            | _ -> return Bool(false) }
+    | [arg] -> arg ||> function Data(d) -> Bool(isNil d) | _ -> Bool(false)
     | m -> malformed "empty?" <| thunkList m
 
 let Cons = function 
-    | [head; tail] -> cps { return cons head tail }
+    | [head; tail] -> cps { return Data(cons head tail) }
     | m -> malformed "cons" <| thunkList m
 
 let Car : Func = function 
-    | [l] ->
-        cps {
-            let! list = l
-            match list with
-            | Data(d) -> return! car d
-            | _ -> return malformed "car" <| thunkList [l] }
+    | [arg] -> arg >>= function Data(d) -> car d | _ -> malformed "car" <| thunkList [arg]
     | m -> malformed "car" <| thunkList m
 
 let Cdr : Func = function
-    | [l] ->
-        cps {
-            let! list = l
-            match list with
-            | Data(d) -> return! cdr d
-            | _ -> return malformed "car" <| thunkList [l] }
+    | [l] -> l >>= function Data(d) -> cdr d | _ -> malformed "cdr" <| thunkList [l]
     | m -> malformed "cdr" <| thunkList m
 
 let Rev = function
-    | [l] ->
-        cps {
-            let! list = l
-            match list with
-            | Data(d) -> 
-                let! wholeList = toList d
-                return List.rev wholeList |> thunkList
-            | m -> return malformed "reverse" m }
+    | [l] -> l >>= function Data(d) -> toList d ||> (List.rev >> thunkList) 
+                          | m -> malformed "reverse" m
     | m -> malformed "reverse" <| thunkList m
 
 let MakeList (args: Thunk list) = thunkList args |> constant
 
 let Len = function
-    | [l] ->
-        cps {
-            let! list = l
-            match list with
-            | Data(d) -> 
-                let! wholeList = toList d
-                return List.length wholeList |> double |> Number
-            | m -> return malformed "len" m }
+    | [l] -> l >>= function Data(d) -> toList d ||> List.length ||> double ||> Number
+                          | m -> malformed "len" m
     | m -> malformed "len" <| thunkList m
 
 let Append : Func = function
@@ -193,9 +195,7 @@ let Append : Func = function
         cps {
             let! list1 = l1
             match list1 with
-            | Data(l1) ->
-                let! list2 = l2
-                return! concat l1 list2
+            | Data(l1) -> return! concat l1 l2 ||> Data
             | _ -> return malformed "append" <| thunkList [l1; l2] }
     | m -> malformed "append" <| thunkList m
 
@@ -204,9 +204,10 @@ let Take = function
         cps {
             let! amt = n
             let! list = l
-            match amt, list with
-            | Number(n), Data(l) -> return! take (int n) l
-            | _ -> return malformed "take" <| thunkList [n; l] }
+            return 
+                match amt, list with
+                | Number(n), Data(l) -> Data(take (int n) l)
+                | _ -> malformed "take" <| thunkList [n; l] }
     | m -> malformed "take" <| thunkList m
 
 let Get = function
@@ -225,9 +226,18 @@ let Drop : Func = function
             let! amt = n
             let! list = l
             match amt, list with
-            | Number(n), Data(l) -> return! drop (int n) l
+            | Number(n), Data(l) -> return! drop (int n) l ||> Data
             | _ -> return malformed "drop" <| thunkList [n; l] }
     | m -> malformed "drop" <| thunkList m
+
+let Last = function
+    | [listArg] as args ->
+        cps {
+            let! l = listArg
+            match l with
+            | Data(d) -> return! toList d ||> List.last
+            | _ -> return malformed "last" <| thunkList args }
+    | m -> malformed "last" <| thunkList m
 
 ///Sorts using natural ordering. Only works for primitive types (numbers, strings, etc.)
 let Sort = function
@@ -239,7 +249,7 @@ let Sort = function
           | Data(l) ->
               let! l = toList l
               if List.isEmpty l then
-                  return malformed "sort" nil
+                  return malformed "sort" <| Data(nil)
               else
                   let! vals = sequence l
                   //Peek and see what kind of data we're sorting

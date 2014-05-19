@@ -36,6 +36,13 @@ and Thunk = Thunk.Thunk<Value, Value>
 ///Function that takes a Value and returns a Value.
 and Continuation = Value -> Value
 
+let ValueToBool = function
+    | Bool(b) -> b
+    | Number(0.) -> false
+    | Data({name="nil"}) -> false
+    | String("") -> false
+    | _ -> true
+
 ///Forces evaluation of a Thunk
 let force (cps: Thunk) = runCPS cps id
 
@@ -50,9 +57,9 @@ let rec print = function
    | String(s) -> "\"" + s + "\""
    | Symbol(s) -> s
    | Number(n) -> n.ToString()
-   | Container(o) -> o.ToString()
+   | Container(o) -> sprintf "#<object:\"%s\">" <| o.ToString()
    | Function(_) -> "#<procedure>"
-   | Dummy(_) -> "" // sometimes useful to emit value for debugging, but normally we ignore
+   | Dummy(_) -> "#<undefined>" // sometimes useful to emit value for debugging, but normally we ignore
    | Bool(b) -> if b then "#t" else "#f"
    | Data(d) -> printDataCon d
 
@@ -80,76 +87,64 @@ and printDataCon d =
 module List =
 
     let isNil { name=name } = name = "nil"
-    let nil = Data({ name="nil"; fields=[||] })
-    let cons h t = Data({ name="cons"; fields=[| h; t |]})
+    let nil = { name="nil"; fields=[||] }
+    let cons h t = { name="cons"; fields=[| h; t |]}
     let car = function
         | { name="cons"; fields=[| h; _ |] } -> h
         | m -> printDataCon m |> sprintf "bad car arg: %s" |> failwith
+    let car' = function
+        | Data(d) -> car d
+        | m -> print m |> sprintf "bad car arg: %s" |> failwith
     let cdr = function
         | { name="cons"; fields=[| _; t |] } -> t
         | m -> printDataCon m |> sprintf "bad cdr arg: %s" |> failwith
+    let cdr' = function
+        | { name="cons"; fields=[| _; t |] } ->
+            t ||> function Data(d) -> d 
+                         | m -> print m |> sprintf "bad cons arg: %s is not a list" |> failwith
+        | m -> printDataCon m |> sprintf "bad cdr arg: %s" |> failwith
 
-    let thunkList : Thunk list -> Value = List.rev >> List.fold (fun a t -> cons t (constant a)) nil
-    let valList : Value list -> Value = List.map constant >> thunkList
+    let thunkList' : Thunk list -> DataCon = List.rev >> List.fold (fun a t -> cons t (constant <| Data(a))) nil
+    let thunkList = thunkList' >> Data
+    let valList' : Value list -> DataCon = List.map constant >> thunkList'
+    let valList = valList' >> Data
 
     let toList (data: DataCon) = 
-        let rec toList (a: Thunk list) : DataCon -> CPS<_, _> = function
-            | { name="cons"; fields=[| h; t |] } ->
-                cps {
-                    let! v = t
-                    match v with
-                    | Data(d) -> return! toList (h::a) d
-                    | m -> return print m |> sprintf "Cannot convert %s to list" |> failwith }
-            | { name="nil" } -> cps { return List.rev a }
-            | m -> printDataCon m |> sprintf "Cannot convert %s to list" |> failwith
+        let rec toList (a: Thunk list) (d: DataCon) : CPS<_, _> =
+            if isNil d |> not then
+                cdr' d >>= toList (car d::a)
+            else
+                cps { return List.rev a }
         toList [] data
 
-    let concat a (b: Value) =
-        let rec append (a: Value) = function
-            | [] -> cps { return a }
-            | h::t -> cps { return! append (cons h <| constant a) t }
-        cps {
-            let! startList = toList a
-            return! append b <| List.rev startList }
-
-    let take n data =
-        let rec take n a data =
-            if n <= 0 then 
-                cps { return List.rev a |> thunkList } 
+    let concat a (b: Thunk) =
+        let rec concat b a =
+            if isNil a then
+                b ||> function Data(d) -> d
+                             | m -> print m |> sprintf "bad concat arg: %s is not a list" |> failwith
             else
-                match data with
-                | { name="cons"; fields=[| h; t |] } ->
-                    cps {
-                        let! list = t
-                        match list with
-                        | Data(list) -> return! take (n - 1) (h :: a) list 
-                        | m -> return print m |> sprintf "Cannot convert %s to list" |> failwith }
-                | { name="nil" } -> cps { return List.rev a |> thunkList }
-                | m -> printDataCon m |> sprintf "Cannot convert %s to list" |> failwith
-        take n [] data
+                let h = car a
+                cps { return cdr' a >>= concat b ||> Data |> cons h }
+        concat b a
+    
+    let rec take n data =
+        if n <= 0 or isNil data then
+            nil 
+        else
+            cdr' data ||> take (n - 1) ||> Data |> cons (car data)
 
     let rec drop n data =
         if n <= 0 then 
-            cps { return Data(data) }
+            cps { return data }
+        else if isNil data then
+            cps { return nil }
         else
-            match data with
-            | { name="cons"; fields=[| _; t |] } ->
-                cps {
-                    let! list = t
-                    match list with
-                    | Data(list) -> return! drop (n - 1) list 
-                    | m -> return print m |> sprintf "Cannot convert %s to list" |> failwith }
-            | { name="nil" } -> cps { return nil }
-            | m -> printDataCon m |> sprintf "Cannot convert %s to list" |> failwith
+            cdr' data >>= drop (n - 1)
 
     let rec get n data =
-        match data with
-        | { name="cons"; fields=[| h; _ |] } when n <= 0 -> h
-        | { name="cons"; fields=[| _; t |] } when n <> 0 ->
-            cps {
-                let! list = t
-                match list with
-                | Data(list) -> return! get (n - 1) list 
-                | m -> return print m |> sprintf "Cannot convert %s to list" |> failwith }
-        | { name="nil" } -> failwith "Index out of bounds."
-        | m -> printDataCon m |> sprintf "Cannot convert %s to list" |> failwith
+        if isNil data then
+            failwith "Index out of bounds."
+        else if n <= 0 then
+            car data
+        else
+            cdr' data >>= get (n - 1)

@@ -34,3 +34,12 @@ let rec sequence ms =
             let! xs = m'
             return x::xs }
     List.foldBack k ms (constant [])
+
+let liftM f m : CPS<_, _> =
+    cps {
+        let! v = m
+        return f v }
+
+let (<||) = liftM
+let (||>) m f = liftM f m
+let (>>=) = Cont.bind

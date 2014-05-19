@@ -29,143 +29,229 @@ let private findInEnv (name : string) compenv =
       | [] -> None
    find 0 compenv
 
+let private wrap x _ = cps { return x }
+
 ///A basic compiler
-let rec private compile (compenv : CompilerEnv) syntax : Environment -> Thunk =
-   let compile' = compile compenv
-   match syntax with
-   | Number_S(n) ->
-      let x = Number(n)
-      fun _ -> cps { return x }
+let rec private compile (compenv : CompilerEnv) expr : Environment -> Thunk =
+    let compile' = compile compenv
+    match expr with
+    //Objects are passed as their Expression equivalent
+    | Number_E(n)    -> wrap <| Number(n)
+    | String_E(s)    -> wrap <| String(s)
+    | Function_E(f)  -> wrap <| Function(f)
+    | Container_E(o) -> wrap <| Container(o)
+    | Value_E(v)     -> wrap v
 
-   | String_S(s) ->
-      let x = String(s)
-      fun _ -> cps { return x }
+    //Identifiers
+    | Id(id) ->
+        match findInEnv id compenv.Value with
+        //If the identifier is in the compiler environment (name registry),
+        //then we fetch it from the environment at runtime.
+        | Some(i1, i2) -> fun env -> (env.Value.Item i1).Value.[i2].Value
+        //If it's not there, then it's a free identifier.
+        | None         -> failwith <| sprintf "Unbound identifier: %s" id
 
-   | Func_S(f) ->
-      let x = Function(f)
-      fun _ -> cps { return x }
+    //Set!
+    | SetId(id, expr) ->
+        match findInEnv id compenv.Value with
+        //If the identifier is in the compiler environment...
+        | Some(i1, i2) ->
+            ///Compiled sub-expression
+            let ce = compile' expr
+            //At runtime we...
+            fun env ->
+                //Store the result of the expression in the identifier's box
+                (env.Value.Item i1).Value.[i2] := make_thunk <| ce env
+                //And return a dummy
+                cps { return Dummy(sprintf "set! %s" id) }
+        //If it's not there, then it's a free identifier.
+        | None -> failwith <| sprintf "Unbound identifier: %s" id
 
-   | Id(id) ->
-      match findInEnv id compenv.Value with
-      | Some(i1, i2) -> fun env -> (env.Value.Item i1).Value.[i2].Value
-      | None -> sprintf "Unbound identifier: %s" id |> failwith
+    //Lets are really just anonymous function calls.
+    | Let(names, exprs, body) -> compile' (List_E(Fun(List.map Normal names, body) :: exprs))
 
-   | SetId(id, expr) ->
-      let ce = compile' expr
-      match findInEnv id compenv.Value with
-      | Some(i1, i2) -> 
-         fun env ->
-            let box = (env.Value.Item i1).Value.[i2]
-            box := make_thunk (ce env)
-            cps { return Dummy(sprintf "set! %s" id) }
-      | None -> sprintf "Unbound identifier: %s" id |> failwith
+    //Recursive let, all identifiers must be added to the environment before any binding expressions are evaluated.
+    | LetRec(names, exprs, body) ->
+        ///Environment containing recursive bindings
+        let compenv' = ref <| names :: compenv.Value
+        ///Compiled body
+        let cbody = compile compenv' body
+        ///Compiled binding expressions
+        let cargs = List.map (compile compenv') exprs
+        ///Runtime identifier boxes
+        let boxes : Thunk ref array = [| for _ in cargs -> ref <| cps { return Dummy("letrec") } |]
+        //At runtime...
+        fun env ->
+            //We append the new frame to the environment
+            let env' = ref <| ref boxes :: env.Value
+            //We evaluate all the binding expressions and store them in their respective identifier's box.
+            for (expr, box) in Seq.zip cargs boxes do box := make_thunk (expr env')
+            //We evaluate the body in the new environment and return the result.
+            cbody env'
 
-   | Bind(names, exprs, body) -> compile' (List_S(Fun(names, body) :: exprs))
+    //Define mutates the current environment with new identifier bindings.
+    | Define(name, body) ->
+        ///Dummy value returned by define statements.
+        let dummy = cps { return Dummy(sprintf "defined '%s'" name) }
+        match List.tryFindIndex ((=) name) compenv.Value.Head with
+        //If the identifier being defined is already in the environment, replace it with the new binding.
+        | Some(idx) ->
+            let cbody = compile' body
+            fun env ->
+                env.Value.Head.Value.[idx] := cbody env
+                dummy
+        //If it's not there, then we need to add it.
+        | None ->
+            ///The index of the new identifier box in the mutated environment.
+            let lastindex = compenv.Value.Head.Length
+            //Update the compiler environment.
+            compenv := (compenv.Value.Head @ [name]) :: compenv.Value.Tail
+            ///Compiled binding expression.
+            let cbody = compile compenv body
+            ///Dummy value for undefined identifiers.
+            let dummy' = Dummy(sprintf "define '%s'" name)
+            //At runtime...
+            fun env ->
+                ///New identifier's box
+                let def = ref <| cps { return dummy' }
+                //Resize the environment to accomodate the new identifier
+                System.Array.Resize(env.Value.Head, lastindex + 1)
+                //Place the box in the environment
+                env.Value.Head.Value.SetValue(def, lastindex)
+                //Evaluate the binding expression with the mutated environment
+                def := make_thunk <| cbody env
+                //Return the dummy for the define statement
+                dummy
 
-   | BindRec(names, exprs, body) ->
-      let cbody = compile (ref (names :: compenv.Value)) body
-      let cargs = List.map (ref (names :: compenv.Value) |> compile) exprs
-      let boxes = [ for _ in 1 .. List.length cargs -> cps { return Dummy("letrec") } |> ref ]
-      let newFrame : Frame = List.toArray boxes |> ref
-      fun env ->
-         let env' = newFrame :: env.Value |> ref
-         let rec mapbind = function
-            | (expr, box) :: t -> box := make_thunk (expr env'); mapbind t
-            | [] -> cbody env'
-         List.zip cargs boxes |> mapbind
+    //Functions
+    | Fun(parameters, body) ->
+        ///Traverses a syntax tree looking for new identifiers from define statements.
+        let findAllDefs = function
+            | Begin(exprs) ->
+                let rec pred defacc = function
+                    | h :: t ->
+                        match h with
+                        | Define(name, _) -> pred (name :: defacc) t
+                        | Begin(exprs)    -> pred (pred defacc exprs) t
+                        | _               -> pred defacc t
+                    | [] -> List.rev defacc
+                pred [] exprs
+            | Define(name, _) -> [name]
+            | _               -> []
+        ///All identifiers being defined in the function's body.
+        let defs = findAllDefs body
+        ///Utility to extract the name of the given parameter.
+        let paramToString = function Normal(s) | Tail(s) -> s
+        ///Compiler environment containing the parameter names
+        let compenv' = ref <| (defs @ List.map paramToString parameters) :: compenv.Value
+        ///Compiled function body
+        let cbody = compile compenv' body
+        ///Number of sub-definitions
+        let buffer = defs.Length
+        ///Size of the environment frame to be created for this function
+        let framesize = parameters.Length + buffer
+        ///Default value for uninitialized identifiers
+        let dummy = cps { return Dummy("undefined") }
+        ///Creates a new runtime environment frame from the arguments to this function
+        let pack args =
+            ///New frame for the function call
+            let frame = Array.zeroCreate framesize
+            ///Recursive helper for processing arguments
+            let rec pack' idx args = function
+                //If there's one parameter left and it's a Tail, then store the parameter's argument as all the arguments in a list.
+                | [Tail(_)] -> frame.[idx] <- ref <| cps { return thunkList args }
+                //If there are parameters left...
+                | _ :: xs ->
+                    match args with
+                    //Reference the first arg in the list, then pack the remaining args with the remaining names.
+                    | h :: t -> frame.[idx] <- ref h; pack' (idx + 1) t xs
+                    //Not enough arguments.
+                    | _      -> failwith <| sprintf "Arity mismatch: Cannot apply %i-arity function on %i arguments." parameters.Length args.Length
+                //If there are no parameters left...
+                | [] ->
+                    match args with
+                    //If there are also no arguments left, we're done.
+                    | [] -> ()
+                    //Too many arguments.
+                    | _  -> failwith <| sprintf "Arity mismatch: Cannot apply %i-arity function on %i arguments." parameters.Length args.Length
+            ///List of identifier boxes for parameters
+            pack' buffer args parameters
+            //Initialize inner-define identifiers with dummy value
+            for i in 0 .. buffer - 1 do frame.[i] <- ref dummy
+            //If we don't, just create a frame out of the packed arguments.
+            frame
+        //At runtime, we need to add the arguments to the environment and evaluate the body.
+        fun env -> cps { return Function(fun exprs -> (ref <| pack exprs) :: env.Value |> ref |> cbody) }
 
-   | Define(name, body) ->
-      match List.tryFindIndex ((=) name) compenv.Value.Head with
-      | Some(idx) ->
-         let cbody = compile' body
-         fun env ->
-            let box = env.Value.Head.Value.[idx]
-            box := make_thunk (cbody env)
-            cps { return Dummy(sprintf "defined '%s'" name) }
-      | None ->
-         let lastindex = compenv.Value.Head.Length
-         compenv := (List.append compenv.Value.Head [name]) :: compenv.Value.Tail
-         let cbody = compile compenv body
-         fun env -> 
-           let def : Thunk ref = ref <| cps { return Dummy(sprintf "define '%s'" name) }
-           System.Array.Resize(env.Value.Head, env.Value.Head.Value.Length + 1)
-           env.Value.Head.Value.SetValue(def, lastindex)
-           def := make_thunk (cbody env)
-           cps { return Dummy(sprintf "defined '%s'" name) }
+    //Function calls
+    | List_E(fun_expr :: args) ->
+        ///Compiled function
+        let cfun = compile' fun_expr
+        ///Compiled arguments
+        let cargs = List.map compile' args
+        ///At runtime...
+        fun env ->
+            //Evaluate the function expression
+            cfun env >>= function
+                //If it's a function, then evaluate the arguments and apply the function.
+                | Function(f) -> f <| List.map (fun x -> x env) cargs
+                //Can't call something that's not a function
+                | _           -> printExpression "" expr |> sprintf "expected function for call: %s" |> failwith
+                
+    //Conditionals
+    | If(cond, then_expr, else_expr) ->
+        ///Compiled test
+        let ccond = compile' cond
+        ///Compiled then branch
+        let cthen = compile' then_expr
+        ///Compiled else branch
+        let celse = compile' else_expr
+        //At runtime, evaluate the expression and select the correct branch
+        fun env -> ccond env ||> ValueToBool >>= function true -> cthen env | _ -> celse env
 
-   | Fun(names, body) ->
-      let compenv' = names :: compenv.Value |> ref
-      let cbody = compile compenv' body
-      let amt = List.length names
-      let pack (args: Thunk list) =
-         let arglen = List.length args
-         if arglen = amt then
-            Seq.map ref args |> Seq.toArray
-         elif amt > 0 then
-            Seq.append (Seq.take (amt - 1) args) 
-                       (Seq.skip (amt - 1) args |> Seq.toList |> thunkList |> constant |> Seq.singleton)
-            |> Seq.map ref 
-            |> Seq.toArray
-         else
-            failwith "Can't call 0-arity function with arguments."
-      fun env ->
-         cps { return Function(fun exprs -> ref (pack exprs) :: env.Value |> ref |> cbody) }
+    //An empty begin statement is valid, but returns a dummy
+    | Begin([]) -> wrap <| Dummy("empty begin")
+    
+    //A begin statement with one sub-expression is the same as just the sub-expression.
+    | Begin([expr]) -> compile' expr
 
-   | List_S(fun_expr :: args) ->
-      let cfun = compile' fun_expr
-      let cargs = List.map compile' args
-      fun env ->
-         cps {
-            let! f' = cfun env
-            match f' with
-            | Function(f) -> return! f (List.map (fun carg -> make_thunk (carg env)) cargs)
-            | m -> return printSyntax "" syntax |> sprintf "expected function for call: %s" |> failwith }
+    //Expression sequences
+    | Begin(exprs) ->
+        ///Merges all nested begin expressions
+        let merge =
+            let rec merge' a = function
+               | [Begin([]) as e]   -> merge' (compile' e :: a) []
+               | Begin(exprs') :: t -> merge' (merge' a exprs') t
+               | h :: t             -> merge' (compile' h :: a) t
+               | []                 -> a
+            merge' [] >> List.rev
+        ///Compiled expressions
+        let body = merge exprs
+        ///Dummy value for empty begin statements
+        let d = Dummy("empty begin")
+        //At runtime, evaluate all expressions in the body and return the result of the last one.
+        fun env -> List.map ((|>) env) body |> sequence ||> function [] -> d | l -> List.last l
+        
+    //Code quotations
+    | Quote(syn) -> makeQuote false compenv syn
+    | Quasi(syn) -> makeQuote true compenv syn
 
-   | If(cond, then_expr, else_expr) ->
-      let ccond = compile' cond
-      let cthen = compile' then_expr
-      let celse = compile' else_expr
-      fun env ->
-         cps {
-            let! cond = ccond env
-            return!
-                match cond with
-                | Bool(b) -> (if b then cthen else celse) env
-                | _ -> cthen env }
+    | m -> failwith "Malformed Value"
 
-   | Begin([expr]) -> compile' expr
-
-   | Begin(exprs) ->
-      let body = List.map compile' exprs
-      let d = Dummy("empty begin")
-      fun env -> 
-        cps { 
-            let! results = List.map ((|>) env) body |> sequence
-            return 
-                if List.isEmpty results then
-                    d
-                else
-                    List.last results }
-
-   | Quote_S(parser) -> makeQuote false compenv parser
-   | Quasi_S(parser) -> makeQuote true compenv parser
-
-   | m -> failwith "Malformed Value"
-
-and private makeQuote isQuasi compenv parser =
+and private makeQuote isQuasi compenv syn =
    let makeQuote' = makeQuote isQuasi compenv
-   match parser with
-   | Number_P(n) -> fun _ -> cps { return Number(n) }
-   | String_P(s) -> fun _ -> cps { return String(s) }
-   | Symbol_P(s) -> fun _ -> cps { return Symbol(s) }
-   | Func_P(f)   -> fun _ -> cps { return Function(f) }
+   match syn with
+   | Number_S(n) -> fun _ -> cps { return Number(n) }
+   | String_S(s) -> fun _ -> cps { return String(s) }
+   | Symbol_S(s) -> fun _ -> cps { return Symbol(s) }
+   | Func_S(f)   -> fun _ -> cps { return Function(f) }
 
-   | List_P(Symbol_P("unquote") :: t) when isQuasi ->
+   | List_S(Symbol_S("unquote") :: t) when isQuasi ->
       match t with
-      | [expr] -> parserToSyntax macroEnv expr |> compile compenv
+      | [expr] -> syntaxToExpression macroEnv expr |> compile compenv
       | _ -> failwith "malformed 'unquote'"
 
-   | List_P(exprs) ->
+   | List_S(exprs) ->
       let qargs = List.map makeQuote' exprs
       fun env ->
          cps {
@@ -174,30 +260,25 @@ and private makeQuote isQuasi compenv parser =
 
 ///Eval construct -- evaluates code quotations
 and Eval (args: Thunk list) : Continuation -> Value =
-   let rec toParser = function
-      | Symbol(s) -> cps { return Symbol_P(s) }
-      | Number(n) -> cps { return Number_P(n) }
-      | String(s) -> cps { return String_P(s) }
-      | Function(f) -> cps { return Func_P(f) }
-      | Data(l) -> 
-            let rec mapparse acc = function
-                | [] -> cps { return List.rev acc |> List_P }
-                | h :: t ->
-                    cps {
-                        let! x = h
-                        let! parser = toParser x
-                        return! mapparse (parser :: acc) t }
+   let rec toSyntax = function
+      | Symbol(s) -> cps { return Symbol_S(s) }
+      | Number(n) -> cps { return Number_S(n) }
+      | String(s) -> cps { return String_S(s) }
+      | Function(f) -> cps { return Func_S(f) }
+      | Data(l) ->
             cps {
-                let! l = toList l
-                return! mapparse [] l }
+                let! thunks = toList l
+                let! values = sequence thunks
+                let! syntax = List.map toSyntax values |> sequence 
+                return List_S(syntax) }
       | m -> malformed "eval" m
    match args with
    | [arg] -> 
         cps {
             let! value = arg
-            let! parser = toParser value
+            let! syn = toSyntax value
             return!
-                parserToSyntax macroEnv parser
+                syntaxToExpression macroEnv syn
                     |> compile compileEnvironment
                     |> fun x -> x environment }
    | m -> cps { return malformed "eval" <| thunkList m }
@@ -231,8 +312,8 @@ let AddDefaultBinding name expr =
    tempEnv <- (name, ref <| constant expr) :: tempEnv
 
 let private makeEnvironments() =
-   AddDefaultBinding "empty" nil
-   AddDefaultBinding "null" nil
+   AddDefaultBinding "empty" (Data(nil))
+   AddDefaultBinding "null" (Data(nil))
    AddDefaultBinding "#t" (Bool(true))
    AddDefaultBinding "#f" (Bool(false))
    AddDefaultBinding "display" (Function(Display))
@@ -277,7 +358,7 @@ let private makeEnvironments() =
    AddDefaultBinding "apply" (Function(Apply))
    AddDefaultBinding "identity" (Function(Identity))
 
-let Evaluate syntax = compile compileEnvironment syntax environment |> force
+let Evaluate expr = compile compileEnvironment expr environment |> force
 
 ///Parses and evaluates a Value given in text form, and returns the resulting Value
 let ParseText text = 
@@ -288,30 +369,30 @@ let ParseText text =
 
 let private evaluateSchemeDefs() =
     "
-   (define not (lambda (x) (if x #f #t)))
+   (define not (λ (x) (if x #f #t)))
 
    (define xor 
-      (lambda (a b) 
+      (λ (a b) 
          (and (or a b) 
                (not (and a b)))))
 
    (define foldr 
       ;; foldr :: (X Y -> Y) Y [listof X] -> Y
-      (lambda (f a xs) 
+      (λ (f a xs) 
          (if (empty? xs) 
              a 
              (f (first xs)
                 (foldr f a (rest xs))))))
                 
    (define foldl
-      (lambda (f a xs)
+      (λ (f a xs)
          (if (empty? xs)
              a
              (foldl f (f (first xs) a) (rest xs))))) 
 
    (define map
       ;; map :: (X -> Y) [listof X] -> [listof Y] 
-      (lambda (f xs) 
+      (λ (f xs) 
          (if (empty? xs)
              empty
              (cons (f (first xs))
@@ -319,7 +400,7 @@ let private evaluateSchemeDefs() =
 
    (define filter 
       ;; filter :: (X -> bool) [listof X] -> [listof X]
-      (lambda (p xs) 
+      (λ (p xs) 
          (if (empty? xs)
              empty
              (let ((frst (first xs))
@@ -330,16 +411,16 @@ let private evaluateSchemeDefs() =
 
    (define cartesian-product 
       ;; cartesian-product :: (X Y ... Z -> A) [listof X] [listof Y] ... [listof Z] -> [listof A]
-      (lambda (comb lsts)
-         (letrec ((cp-atom-list (lambda (at lst) 
-                                    (letrec ((cal* (lambda (x l a) 
+      (λ (comb lsts)
+         (letrec ((cp-atom-list (λ (at lst) 
+                                    (letrec ((cal* (λ (x l a) 
                                                       (if (empty? l) 
                                                             (reverse a) 
                                                             (cal* x (rest l) (cons (cons x (first l)) a)))))) 
                                        (cal* at lst empty))))
 
-                  (cp-list-list (lambda (l1 l2)
-                                    (letrec ((cll* (lambda (m n a) 
+                  (cp-list-list (λ (l1 l2)
+                                    (letrec ((cll* (λ (m n a) 
                                                       (if (or (empty? m) (empty? n))
                                                             a 
                                                             (cll* (rest m) n (append a (cp-atom-list (first m) n)))))))
@@ -347,41 +428,41 @@ let private evaluateSchemeDefs() =
 
             (let* ((lofls (reverse lsts)) 
                      (rst (rest lofls))
-                     (cp (lambda (lsts) 
+                     (cp (λ (lsts) 
                            (foldl cp-list-list 
                                  (map list (first lofls))
                                  rst))))
-               (map (lambda (args) (apply comb args)) (cp lofls))))))
+               (map (λ (args) (apply comb args)) (cp lofls))))))
 
    (define qs 
       ;; qs :: [listof X] (X -> Y) (Y Y -> bool) -> [listof X]
-      (lambda (lst f c) 
+      (λ (lst f c) 
          (if (empty? lst) 
                empty 
                (let* ((pivot (f (first lst))) 
-                     (lt (filter (lambda (x) (c (f x) pivot)) (rest lst)))
-                     (gt (filter (lambda (x) (not (c (f x) pivot))) (rest lst))))
+                     (lt (filter (λ (x) (c (f x) pivot)) (rest lst)))
+                     (gt (filter (λ (x) (not (c (f x) pivot))) (rest lst))))
                (append (qs lt f c) (cons (first lst) (qs gt f c))))))) 
             
    (define sort-with 
       ;; sort-with :: [listof X] (X X -> int) -> [listof X]
-      (lambda (lst comp) 
+      (λ (lst comp) 
          (qs lst 
-               (lambda (x) x)
-               (lambda (a b) (< (comp a b) 0))))) 
+               (λ (x) x)
+               (λ (a b) (< (comp a b) 0))))) 
                       
    (define sort-by
       ;; sort-by :: [listof X] (X -> IComparable) -> [listof X]
-      (lambda (lst proj) 
-         (map (lambda (x) (first x))                       ;; Convert back to original list
-              (qs (map (lambda (x) (list x (proj x))) lst) ;; Sort list of original element/projection pairs
-                  (lambda (y) (first (rest y)))            ;; Sort based on the second element in the sub-lists
+      (λ (lst proj) 
+         (map (λ (x) (first x))                       ;; Convert back to original list
+              (qs (map (λ (x) (list x (proj x))) lst) ;; Sort list of original element/projection pairs
+                  (λ (y) (first (rest y)))            ;; Sort based on the second element in the sub-lists
                   <))))                                    ;; Compare using less-than
 
   (define zip
       ;; zip :: [listof X] [listof Y] ... [listof Z] -> [listof [listof X Y ... Z]]
-      (lambda (lofls) 
-         (letrec ((zip'' (lambda (lofls a al) 
+      (λ (lofls) 
+         (letrec ((zip'' (λ (lofls a al) 
                            (if (empty? lofls) 
                                  (list (reverse a) (reverse al)) 
                                  (if (empty? (first lofls)) 
@@ -389,7 +470,7 @@ let private evaluateSchemeDefs() =
                                     (zip'' (rest lofls) 
                                            (cons (first (first lofls)) a) 
                                            (cons (rest (first lofls)) al)))))) 
-                  (zip' (lambda (lofls acc) 
+                  (zip' (λ (lofls acc) 
                            (let ((result (zip'' lofls empty empty))) 
                               (if (empty? (first result)) 
                                     (reverse acc) 
@@ -400,17 +481,16 @@ let private evaluateSchemeDefs() =
 
    (define combine 
       ;; combine :: (X Y ... Z -> A) [listof X] [listof Y] ... [listof Z] -> [listof A]
-      (lambda (f lofls) 
-         (map (lambda (x) (apply f x)) 
+      (λ (f lofls) 
+         (map (λ (x) (apply f x)) 
                (zip lofls))))
 
   (define for-each 
      ;; for-each :: (X -> unit) [listof X] -> unit
-     (lambda (f lst) (foldr (lambda (x _) (f x)) (begin) lst)))
+     (λ (f lst) (foldr (λ (x _) (f x)) (begin) lst)))
   
-  (define fix (lambda (f) (f (fix f))))
-  
-  (define nats (cons 0 (map add1 nats)))"
+  (define fix (λ (f) (f (fix f))))
+  "
     |> ParseText |> ignore
 
 makeEnvironments()
@@ -485,7 +565,7 @@ let test (log : ErrorLog) =
    case "(sort (list \"b\" \"c\" \"a\"))" "(\"a\" \"b\" \"c\")" // sort
 
    //Scope
-   case "(let ((y 6)) (let ((f (lambda (x) (+ x y)))) (let ((y 5)) (f 4))))" "10"
+   case "(let ((y 6)) (let ((f (λ (x) (+ x y)))) (let ((y 5)) (f 4))))" "10"
 
    //Apply
    case "(apply + '(1 2))" "3"
@@ -496,22 +576,22 @@ let test (log : ErrorLog) =
    case "(foldr * 1 '(2 3 4 5))" "120" // fold
    
    //Map
-   case "(map (lambda (x) x) '(1 2 3))" "(1 2 3)"
+   case "(map (λ (x) x) '(1 2 3))" "(1 2 3)"
    
    //Filter
-   case "(filter (lambda (x) (< x 2)) '(0 2 3 4 1 6 5))" "(0 1)"
+   case "(filter (λ (x) (< x 2)) '(0 2 3 4 1 6 5))" "(0 1)"
    
    //Cartesian Product
    case "(cartesian-product list (list 1 2) (list 3 4) (list 5 6))" 
         "((1 3 5) (1 3 6) (1 4 5) (1 4 6) (2 3 5) (2 3 6) (2 4 5) (2 4 6))"
    
    //Sorting
-   case "(sort-by '((2 2) (2 1) (1 1)) (lambda (x) (foldr + 0 x)))" "((1 1) (2 1) (2 2))"
-   case "(sort-with '((2 2) (2 1) (1 1)) (lambda (x y) (let ((size (lambda (l) (foldr + 0 l)))) (- (size x) (size y)))))" "((1 1) (2 1) (2 2))"
+   case "(sort-by '((2 2) (2 1) (1 1)) (λ (x) (foldr + 0 x)))" "((1 1) (2 1) (2 2))"
+   case "(sort-with '((2 2) (2 1) (1 1)) (λ (x y) (let ((size (λ (l) (foldr + 0 l)))) (- (size x) (size y)))))" "((1 1) (2 1) (2 2))"
    
    //Zip/Combine
    case "(zip '((1) (2) (3)) '((4) (5) (6)))" "(((1) (4)) ((2) (5)) ((3) (6)))"
-   case "(combine (lambda (x y) (append x y)) '((1) (2) (3)) '((4) (5) (6)))" "((1 4) (2 5) (3 6))"
+   case "(combine (λ (x y) (append x y)) '((1) (2) (3)) '((4) (5) (6)))" "((1 4) (2 5) (3 6))"
    
    //Engine Tests
    case "(quote (* 2 3))" "(* 2 3)" // quote primitive
@@ -521,21 +601,21 @@ let test (log : ErrorLog) =
    case "(quasiquote (* 2 (unquote (- 5 2))))" "(* 2 3)" // quote nested unquote
    case "(let ((a 1)) (begin (set! a 2) a))" "2" // begin and assign
    case "(let* ((a 5) (dummy (set! a 10))) a)" "10" // re-assign after let
-   case "(begin (define too-many (lambda (a x) x)) (too-many 1 2 3))" "(2 3)"
+   case "(begin (define too-many (λ (a x) x)) (too-many 1 2 3))" "(2 3)"
    case "(too-many '(1 1) '(2 2) '(3 3))" "((2 2) (3 3))"
    case "(reverse '(1 2 3))" "(3 2 1)" // reverse
    case "(list 1 2 3)" "(1 2 3)"
-   case "(let ((square (lambda (x) (* x x)))) (map square '(1 2 3 4 5 6 7 8 9)))" "(1 4 9 16 25 36 49 64 81)" // mapping
-   case "(let ((square (lambda (x) (* x x)))) (map square '(9)))" "(81)" // mapping single
-   case "(let ((square (lambda (x) (* x x)))) (map square '()))" "()" // mapping empty
-   case "(call/cc (lambda (c) (c 10)))" "10" // super-simple call/cc
-   case "(call/cc (lambda (c) (if (c 10) 20 30)))" "10" // call/cc bailing out of 'if'
-   case "(+ 8 (call/cc (lambda (k^) (* (k^ 5) 100))))" "13" // call/cc bailing out of multiplication
-   case "(* (+ (call/cc (lambda (k^) (/ (k^ 5) 4))) 8) 3)" "39" // call/cc nesting
-   case "(let ((divide (lambda (x y) (call/cc (lambda (k^) (if (= y 0) (k^ \"error\") (/ x y))))))) (divide 1 0))" "\"error\"" // call/cc as an error handler
+   case "(let ((square (λ (x) (* x x)))) (map square '(1 2 3 4 5 6 7 8 9)))" "(1 4 9 16 25 36 49 64 81)" // mapping
+   case "(let ((square (λ (x) (* x x)))) (map square '(9)))" "(81)" // mapping single
+   case "(let ((square (λ (x) (* x x)))) (map square '()))" "()" // mapping empty
+   case "(call/cc (λ (c) (c 10)))" "10" // super-simple call/cc
+   case "(call/cc (λ (c) (if (c 10) 20 30)))" "10" // call/cc bailing out of 'if'
+   case "(+ 8 (call/cc (λ (k^) (* (k^ 5) 100))))" "13" // call/cc bailing out of multiplication
+   case "(* (+ (call/cc (λ (k^) (/ (k^ 5) 4))) 8) 3)" "39" // call/cc nesting
+   case "(let ((divide (λ (x y) (call/cc (λ (k^) (if (= y 0) (k^ \"error\") (/ x y))))))) (divide 1 0))" "\"error\"" // call/cc as an error handler
 
    //Lazy Test
-   case "((lambda (x y) x) 1 ((lambda (x) (x x)) (lambda (x) (x x))))" "1"
+   case "((λ (x y) x) 1 ((λ (x) (x x)) (λ (x) (x x))))" "1"
    case "(let ((nats (cons 0 (map add1 nats)))) (take 5 nats))" "(0 1 2 3 4)"
 
    success.Value
